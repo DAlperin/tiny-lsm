@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
+use std::fmt;
 
-#[derive(Debug)]
 pub struct LsmTree {
     // In-memory sorted data structure to hold recent writes
-    memtable: BTreeMap<String, String>,
+    memtable: BTreeMap<Vec<u8>, Vec<u8>>,
     levels: Vec<Option<LsmLevel>>,
 
     // Threshold for flushing memtable to disk
@@ -23,7 +23,7 @@ impl LsmTree {
         self.memtable_threshold << level // Each level can hold 2^level times the memtable threshold
     }
 
-    pub fn insert(&mut self, key: String, value: String) {
+    pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
         self.memtable.insert(key, value);
         if self.memtable.len() >= self.memtable_threshold {
             self.flush_memtable();
@@ -38,7 +38,7 @@ impl LsmTree {
         self.merge_into_level(0, new_level_data);
     }
 
-    fn merge_into_level(&mut self, level: usize, new_data: Vec<(String, String)>) {
+    fn merge_into_level(&mut self, level: usize, new_data: Vec<(Vec<u8>, Vec<u8>)>) {
         if level >= self.levels.len() {
             let stats = compute_stats(&new_data);
             self.levels.push(Some(LsmLevel {
@@ -68,7 +68,8 @@ impl LsmTree {
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<String> {
+    #[cfg(test)]
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         // Check memtable first
         if let Some(value) = self.memtable.get(key) {
             return Some(value.clone());
@@ -77,11 +78,11 @@ impl LsmTree {
         // Check levels from newest to oldest
         for level in &self.levels {
             if let Some(level) = level {
-                if key < level.stats.lower.as_str() || key > level.stats.upper.as_str() {
+                if key < level.stats.lower.as_slice() || key > level.stats.upper.as_slice() {
                     continue; // Key is out of bounds for this level
                 }
                 // Perform binary search in the level's data
-                if let Ok(pos) = level.data.binary_search_by(|(k, _)| k.as_str().cmp(key)) {
+                if let Ok(pos) = level.data.binary_search_by(|(k, _)| k.as_slice().cmp(key)) {
                     return Some(level.data[pos].1.clone());
                 }
             }
@@ -94,38 +95,38 @@ impl LsmTree {
     /// Returns an iterator that yields (key, value) pairs in sorted order.
     pub fn scan<'a, 'b: 'a>(
         &'a self,
-        start: Option<&'b str>,
-        end: Option<&'b str>,
-    ) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
-        let mut iterators: Vec<Box<dyn Iterator<Item = (&'a str, &'a str)> + 'a>> = vec![];
+        start: Option<&'b [u8]>,
+        end: Option<&'b [u8]>,
+    ) -> impl Iterator<Item = (&'a [u8], &'a [u8])> + 'a {
+        let mut iterators: Vec<Box<dyn Iterator<Item = (&'a [u8], &'a [u8])> + 'a>> = vec![];
 
         let lower_bound = if let Some(start) = start {
-            std::ops::Bound::Included(start)
+            std::ops::Bound::Included(start.to_vec())
         } else {
             std::ops::Bound::Unbounded
         };
 
         let upper_bound = if let Some(end) = end {
-            std::ops::Bound::Included(end)
+            std::ops::Bound::Included(end.to_vec())
         } else {
             std::ops::Bound::Unbounded
         };
 
         let memtable_iter = self
             .memtable
-            .range::<str, _>((lower_bound, upper_bound))
-            .map(|(k, v)| (k.as_str(), v.as_str()));
+            .range::<Vec<u8>, _>((lower_bound, upper_bound))
+            .map(|(k, v)| (k.as_slice(), v.as_slice()));
 
         iterators.push(Box::new(memtable_iter));
 
         for level in self.levels.iter().filter_map(|l| l.as_ref()) {
             if let Some(start) = start {
-                if start > level.stats.upper.as_str() {
+                if start > level.stats.upper.as_slice() {
                     continue;
                 }
             }
             if let Some(end) = end {
-                if end < level.stats.lower.as_str() {
+                if end < level.stats.lower.as_slice() {
                     continue;
                 }
             }
@@ -134,28 +135,137 @@ impl LsmTree {
                 .data
                 .iter()
                 .filter(move |(k, _)| {
-                    let key = k.as_str();
+                    let key = k.as_slice();
                     start.map_or(true, |s| key >= s) && end.map_or(true, |e| key <= e)
                 })
-                .map(|(k, v)| (k.as_str(), v.as_str()));
+                .map(|(k, v)| (k.as_slice(), v.as_slice()));
 
             iterators.push(Box::new(level_iter));
         }
 
         ScanIterator::new(iterators)
     }
+
+    /// Returns the number of entries in the memtable.
+    pub fn memtable_len(&self) -> usize {
+        self.memtable.len()
+    }
+
+    /// Pretty-prints the tree structure with a custom value formatter.
+    /// The formatter receives (key_bytes, value_bytes) and returns a string representation.
+    pub fn display_with_formatter<F>(&self, f: &mut fmt::Formatter<'_>, value_fmt: F) -> fmt::Result
+    where
+        F: Fn(&[u8], &[u8]) -> String,
+    {
+        writeln!(f, "LsmTree {{")?;
+        writeln!(f, "  memtable_threshold: {}", self.memtable_threshold)?;
+        writeln!(f, "  memtable: ({} entries) {{", self.memtable.len())?;
+        for (key, value) in &self.memtable {
+            writeln!(f, "    {}", value_fmt(key, value))?;
+        }
+        writeln!(f, "  }}")?;
+
+        writeln!(f, "  levels: ({} levels) [", self.levels.len())?;
+        for (i, level) in self.levels.iter().enumerate() {
+            let capacity = self.level_capacity(i);
+            match level {
+                Some(l) => {
+                    writeln!(f, "    L{} ({}/{} entries, keys: {:?}..{:?}) {{",
+                        i,
+                        l.data.len(),
+                        capacity,
+                        format_key_short(&l.stats.lower),
+                        format_key_short(&l.stats.upper),
+                    )?;
+                    for (key, value) in &l.data {
+                        writeln!(f, "      {}", value_fmt(key, value))?;
+                    }
+                    writeln!(f, "    }}")?;
+                }
+                None => {
+                    writeln!(f, "    L{} (empty, capacity: {})", i, capacity)?;
+                }
+            }
+        }
+        writeln!(f, "  ]")?;
+        writeln!(f, "}}")
+    }
 }
 
-fn compute_stats(data: &[(String, String)]) -> LevelStats {
+/// Formats a key for display, showing as string if valid UTF-8, otherwise as hex.
+fn format_key_short(key: &[u8]) -> String {
+    if key.is_empty() {
+        return "[]".to_string();
+    }
+    // Skip table prefix (first 4 bytes) if present and show the rest
+    let display_part = if key.len() > 4 { &key[4..] } else { key };
+    match std::str::from_utf8(display_part) {
+        Ok(s) if s.chars().all(|c| c.is_ascii_graphic() || c == ' ') => {
+            format!("\"{}\"", s)
+        }
+        _ => format!("{:02x?}", &key[..key.len().min(8)]),
+    }
+}
+
+/// Default formatter that shows keys/values as strings or hex.
+fn default_kv_formatter(key: &[u8], value: &[u8]) -> String {
+    let key_str = format_bytes_smart(key);
+    let value_str = format_bytes_smart(value);
+    format!("{} => {}", key_str, value_str)
+}
+
+/// Formats bytes as a string if valid UTF-8, otherwise as hex.
+fn format_bytes_smart(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) if s.chars().all(|c| c.is_ascii_graphic() || c == ' ') => {
+            format!("\"{}\"", s)
+        }
+        _ if bytes.len() <= 32 => {
+            format!("0x{}", hex_encode(bytes))
+        }
+        _ => {
+            format!("0x{}... ({} bytes)", hex_encode(&bytes[..16]), bytes.len())
+        }
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+impl fmt::Debug for LsmTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.display_with_formatter(f, default_kv_formatter)
+    }
+}
+
+impl fmt::Display for LsmTree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "LsmTree: {} memtable entries, {} levels", self.memtable.len(), self.levels.len())?;
+        for (i, level) in self.levels.iter().enumerate() {
+            match level {
+                Some(l) => {
+                    writeln!(f, "  L{}: {} entries (capacity: {})", i, l.data.len(), self.level_capacity(i))?;
+                }
+                None => {
+                    writeln!(f, "  L{}: empty", i)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn compute_stats(data: &[(Vec<u8>, Vec<u8>)]) -> LevelStats {
     let lower = data.first().map(|(k, _)| k.clone()).unwrap_or_default();
     let upper = data.last().map(|(k, _)| k.clone()).unwrap_or_default();
     LevelStats { lower, upper }
 }
 
 fn merge_sorted(
-    existing: Vec<(String, String)>,
-    new_data: Vec<(String, String)>,
-) -> Vec<(String, String)> {
+    existing: Vec<(Vec<u8>, Vec<u8>)>,
+    new_data: Vec<(Vec<u8>, Vec<u8>)>,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
     // When merging, we want to keep the most recent value for each key
     let mut merged = vec![];
     // Use two pointers to merge the sorted lists
@@ -200,22 +310,22 @@ fn merge_sorted(
 #[derive(Debug)]
 struct LsmLevel {
     // For simplicity, we will just store the data directly in the level
-    data: Vec<(String, String)>,
+    data: Vec<(Vec<u8>, Vec<u8>)>,
     stats: LevelStats,
 }
 
 #[derive(Debug)]
 struct LevelStats {
-    lower: String,
-    upper: String,
+    lower: Vec<u8>,
+    upper: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct HeapMergeItem<'a> {
     /// The key of the item being merged
-    key: &'a str,
+    key: &'a [u8],
     /// The value of the item being merged
-    value: &'a str,
+    value: &'a [u8],
     /// Which iterator this item came from
     index: usize,
 }
@@ -239,13 +349,13 @@ impl<'a> PartialOrd for HeapMergeItem<'a> {
 // Merges multiple sorted iterators, giving precedence to earlier iterators.
 // Implemented as a basic k-way merge using a binary heap.
 struct ScanIterator<'a> {
-    iterators: Vec<Box<dyn Iterator<Item = (&'a str, &'a str)> + 'a>>,
+    iterators: Vec<Box<dyn Iterator<Item = (&'a [u8], &'a [u8])> + 'a>>,
     heap: std::collections::BinaryHeap<HeapMergeItem<'a>>,
-    last_key: Option<String>,
+    last_key: Option<Vec<u8>>,
 }
 
 impl<'a> ScanIterator<'a> {
-    fn new(mut iterators: Vec<Box<dyn Iterator<Item = (&'a str, &'a str)> + 'a>>) -> Self {
+    fn new(mut iterators: Vec<Box<dyn Iterator<Item = (&'a [u8], &'a [u8])> + 'a>>) -> Self {
         let mut heap = std::collections::BinaryHeap::new();
         for (index, iter) in iterators.iter_mut().enumerate() {
             if let Some((key, value)) = iter.next() {
@@ -261,7 +371,7 @@ impl<'a> ScanIterator<'a> {
 }
 
 impl<'a> Iterator for ScanIterator<'a> {
-    type Item = (&'a str, &'a str);
+    type Item = (&'a [u8], &'a [u8]);
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -276,12 +386,12 @@ impl<'a> Iterator for ScanIterator<'a> {
             }
 
             if let Some(last) = &self.last_key {
-                if *last == item.key {
+                if last.as_slice() == item.key {
                     continue;
                 }
             }
 
-            self.last_key = Some(item.key.to_string());
+            self.last_key = Some(item.key.to_vec());
             return Some((item.key, item.value));
         }
     }
@@ -294,28 +404,28 @@ mod tests {
     #[test]
     fn test_basic_insert_and_get() {
         let mut lsm = LsmTree::new(10);
-        lsm.insert("key1".to_string(), "value1".to_string());
-        lsm.insert("key2".to_string(), "value2".to_string());
+        lsm.insert(b"key1".to_vec(), b"value1".to_vec());
+        lsm.insert(b"key2".to_vec(), b"value2".to_vec());
 
-        assert_eq!(lsm.get("key1"), Some("value1".to_string()));
-        assert_eq!(lsm.get("key2"), Some("value2".to_string()));
-        assert_eq!(lsm.get("key3"), None);
+        assert_eq!(lsm.get(b"key1"), Some(b"value1".to_vec()));
+        assert_eq!(lsm.get(b"key2"), Some(b"value2".to_vec()));
+        assert_eq!(lsm.get(b"key3"), None);
     }
 
     #[test]
     fn test_memtable_flush() {
         let mut lsm = LsmTree::new(2);
 
-        lsm.insert("k1".to_string(), "v1".to_string());
-        lsm.insert("k2".to_string(), "v2".to_string());
+        lsm.insert(b"k1".to_vec(), b"v1".to_vec());
+        lsm.insert(b"k2".to_vec(), b"v2".to_vec());
 
         assert_eq!(lsm.memtable.len(), 0);
         assert_eq!(lsm.levels.len(), 1);
         assert!(lsm.levels[0].is_some());
         assert_eq!(lsm.levels[0].as_ref().unwrap().data.len(), 2);
 
-        assert_eq!(lsm.get("k1"), Some("v1".to_string()));
-        assert_eq!(lsm.get("k2"), Some("v2".to_string()));
+        assert_eq!(lsm.get(b"k1"), Some(b"v1".to_vec()));
+        assert_eq!(lsm.get(b"k2"), Some(b"v2".to_vec()));
     }
 
     #[test]
@@ -326,8 +436,8 @@ mod tests {
         let mut lsm = LsmTree::new(2);
 
         // 1. Insert 2 items -> Flush to L0. L0 size 2.
-        lsm.insert("a".to_string(), "1".to_string());
-        lsm.insert("b".to_string(), "2".to_string());
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
 
         println!("After first flush: {:#?}", lsm);
 
@@ -337,8 +447,8 @@ mod tests {
         // 2. Insert 2 items -> Flush to L0.
         // Merge (L0 existing) + (New) = 4 items.
         // 4 > L0 capacity (2). So push to L1.
-        lsm.insert("c".to_string(), "3".to_string());
-        lsm.insert("d".to_string(), "4".to_string());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+        lsm.insert(b"d".to_vec(), b"4".to_vec());
 
         println!("After second flush: {:#?}", lsm);
 
@@ -347,27 +457,27 @@ mod tests {
         assert!(lsm.levels[1].is_some()); // L1 has the data
         assert_eq!(lsm.levels[1].as_ref().unwrap().data.len(), 4);
 
-        assert_eq!(lsm.get("a"), Some("1".to_string()));
-        assert_eq!(lsm.get("d"), Some("4".to_string()));
+        assert_eq!(lsm.get(b"a"), Some(b"1".to_vec()));
+        assert_eq!(lsm.get(b"d"), Some(b"4".to_vec()));
     }
 
     #[test]
     fn test_overwrite() {
         let mut lsm = LsmTree::new(2);
-        lsm.insert("key1".to_string(), "val1".to_string());
-        lsm.insert("key1".to_string(), "val2".to_string()); // Overwrite in memtable
+        lsm.insert(b"key1".to_vec(), b"val1".to_vec());
+        lsm.insert(b"key1".to_vec(), b"val2".to_vec()); // Overwrite in memtable
 
-        assert_eq!(lsm.get("key1"), Some("val2".to_string()));
+        assert_eq!(lsm.get(b"key1"), Some(b"val2".to_vec()));
 
         // Flush
-        lsm.insert("key2".to_string(), "val3".to_string()); // Trigger flush (size 2)
+        lsm.insert(b"key2".to_vec(), b"val3".to_vec()); // Trigger flush (size 2)
 
         // Now key1 is in L0 with val2.
-        assert_eq!(lsm.get("key1"), Some("val2".to_string()));
+        assert_eq!(lsm.get(b"key1"), Some(b"val2".to_vec()));
 
         // Overwrite again in memtable
-        lsm.insert("key1".to_string(), "val3".to_string());
-        assert_eq!(lsm.get("key1"), Some("val3".to_string()));
+        lsm.insert(b"key1".to_vec(), b"val3".to_vec());
+        assert_eq!(lsm.get(b"key1"), Some(b"val3".to_vec()));
     }
 
     #[test]
@@ -375,18 +485,18 @@ mod tests {
         let mut lsm = LsmTree::new(2);
 
         // Insert "a", "b" -> Flush to L0
-        lsm.insert("a".to_string(), "1".to_string());
-        lsm.insert("b".to_string(), "2".to_string());
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
 
         // Insert "c", "d" -> Flush to L0 -> Merge with L0 -> L1
-        lsm.insert("c".to_string(), "3".to_string());
-        lsm.insert("d".to_string(), "4".to_string());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+        lsm.insert(b"d".to_vec(), b"4".to_vec());
 
         // Insert "e" -> Memtable
-        lsm.insert("e".to_string(), "5".to_string());
+        lsm.insert(b"e".to_vec(), b"5".to_vec());
 
         // Overwrite "b" in memtable
-        lsm.insert("b".to_string(), "20".to_string());
+        lsm.insert(b"b".to_vec(), b"20".to_vec());
 
         // Current state:
         // Memtable: "b" -> "20", "e" -> "5"
@@ -394,7 +504,7 @@ mod tests {
         // L0: None
 
         // Scan from "a" to "z"
-        let items: Vec<_> = lsm.scan(Some("a"), Some("z")).collect();
+        let items: Vec<_> = lsm.scan(Some(b"a"), Some(b"z")).collect();
 
         // Verify we got the latest values and all keys
         let mut sorted_items = items.clone();
@@ -403,11 +513,11 @@ mod tests {
         assert_eq!(
             sorted_items,
             vec![
-                ("a", "1"),
-                ("b", "20"), // Latest value
-                ("c", "3"),
-                ("d", "4"),
-                ("e", "5"),
+                (b"a".as_slice(), b"1".as_slice()),
+                (b"b".as_slice(), b"20".as_slice()), // Latest value
+                (b"c".as_slice(), b"3".as_slice()),
+                (b"d".as_slice(), b"4".as_slice()),
+                (b"e".as_slice(), b"5".as_slice()),
             ]
         );
     }
@@ -416,11 +526,11 @@ mod tests {
     fn test_full_scan() {
         let mut lsm = LsmTree::new(2);
 
-        lsm.insert("a".to_string(), "1".to_string());
-        lsm.insert("b".to_string(), "2".to_string());
-        lsm.insert("c".to_string(), "3".to_string());
-        lsm.insert("d".to_string(), "4".to_string());
-        lsm.insert("e".to_string(), "5".to_string());
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+        lsm.insert(b"d".to_vec(), b"4".to_vec());
+        lsm.insert(b"e".to_vec(), b"5".to_vec());
 
         let items: Vec<_> = lsm.scan(None, None).collect();
 
@@ -429,7 +539,13 @@ mod tests {
 
         assert_eq!(
             sorted_items,
-            vec![("a", "1"), ("b", "2"), ("c", "3"), ("d", "4"), ("e", "5"),]
+            vec![
+                (b"a".as_slice(), b"1".as_slice()),
+                (b"b".as_slice(), b"2".as_slice()),
+                (b"c".as_slice(), b"3".as_slice()),
+                (b"d".as_slice(), b"4".as_slice()),
+                (b"e".as_slice(), b"5".as_slice()),
+            ]
         );
     }
 
@@ -440,13 +556,15 @@ mod tests {
         // Iter 1 (Medium priority):  ("a", "1"),  ("b", "2")
         // Iter 2 (Lowest priority):  ("b", "20"), ("d", "4")
 
-        let iter0 = vec![("a", "10"), ("c", "30")].into_iter();
+        let data0: Vec<(&[u8], &[u8])> = vec![(b"a", b"10"), (b"c", b"30")];
+        let data1: Vec<(&[u8], &[u8])> = vec![(b"a", b"1"), (b"b", b"2")];
+        let data2: Vec<(&[u8], &[u8])> = vec![(b"b", b"20"), (b"d", b"4")];
 
-        let iter1 = vec![("a", "1"), ("b", "2")].into_iter();
+        let iter0 = data0.into_iter();
+        let iter1 = data1.into_iter();
+        let iter2 = data2.into_iter();
 
-        let iter2 = vec![("b", "20"), ("d", "4")].into_iter();
-
-        let iterators: Vec<Box<dyn Iterator<Item = (&str, &str)>>> =
+        let iterators: Vec<Box<dyn Iterator<Item = (&[u8], &[u8])>>> =
             vec![Box::new(iter0), Box::new(iter1), Box::new(iter2)];
 
         let scan_iter = ScanIterator::new(iterators);
@@ -455,10 +573,10 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                ("a", "10"), // From iter0
-                ("b", "2"),  // From iter1 (iter0 didn't have 'b')
-                ("c", "30"), // From iter0
-                ("d", "4"),  // From iter2
+                (b"a".as_slice(), b"10".as_slice()), // From iter0
+                (b"b".as_slice(), b"2".as_slice()),  // From iter1 (iter0 didn't have 'b')
+                (b"c".as_slice(), b"30".as_slice()), // From iter0
+                (b"d".as_slice(), b"4".as_slice()),  // From iter2
             ]
         );
     }
