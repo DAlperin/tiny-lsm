@@ -68,7 +68,6 @@ impl LsmTree {
         }
     }
 
-    #[cfg(test)]
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         // Check memtable first
         if let Some(value) = self.memtable.get(key) {
@@ -170,7 +169,9 @@ impl LsmTree {
             let capacity = self.level_capacity(i);
             match level {
                 Some(l) => {
-                    writeln!(f, "    L{} ({}/{} entries, keys: {:?}..{:?}) {{",
+                    writeln!(
+                        f,
+                        "    L{} ({}/{} entries, keys: {:?}..{:?}) {{",
                         i,
                         l.data.len(),
                         capacity,
@@ -241,11 +242,22 @@ impl fmt::Debug for LsmTree {
 
 impl fmt::Display for LsmTree {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "LsmTree: {} memtable entries, {} levels", self.memtable.len(), self.levels.len())?;
+        writeln!(
+            f,
+            "LsmTree: {} memtable entries, {} levels",
+            self.memtable.len(),
+            self.levels.len()
+        )?;
         for (i, level) in self.levels.iter().enumerate() {
             match level {
                 Some(l) => {
-                    writeln!(f, "  L{}: {} entries (capacity: {})", i, l.data.len(), self.level_capacity(i))?;
+                    writeln!(
+                        f,
+                        "  L{}: {} entries (capacity: {})",
+                        i,
+                        l.data.len(),
+                        self.level_capacity(i)
+                    )?;
                 }
                 None => {
                     writeln!(f, "  L{}: empty", i)?;
