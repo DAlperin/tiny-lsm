@@ -24,10 +24,10 @@ impl LsmTree {
     }
 
     pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        self.memtable.insert(key, value);
-        if self.memtable.len() >= self.memtable_threshold {
-            self.flush_memtable();
-        }
+        // TODO: Implement insert
+        // Insert into memtable, flush to disk if threshold reached
+        // Useful: self.memtable.insert(), self.memtable.len(), self.flush_memtable()
+        todo!("Implement insert")
     }
 
     fn flush_memtable(&mut self) {
@@ -69,25 +69,10 @@ impl LsmTree {
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        // Check memtable first
-        if let Some(value) = self.memtable.get(key) {
-            return Some(value.clone());
-        }
-
-        // Check levels from newest to oldest
-        for level in &self.levels {
-            if let Some(level) = level {
-                if key < level.stats.lower.as_slice() || key > level.stats.upper.as_slice() {
-                    continue; // Key is out of bounds for this level
-                }
-                // Perform binary search in the level's data
-                if let Ok(pos) = level.data.binary_search_by(|(k, _)| k.as_slice().cmp(key)) {
-                    return Some(level.data[pos].1.clone());
-                }
-            }
-        }
-
-        None // Key not found
+        // TODO: Implement get
+        // Check memtable first, then search through levels
+        // Useful: self.memtable.get(), level.stats.{lower,upper}
+        todo!("Implement get")
     }
 
     /// Scans for all key-value pairs in the range [start, end].
@@ -278,45 +263,9 @@ fn merge_sorted(
     existing: Vec<(Vec<u8>, Vec<u8>)>,
     new_data: Vec<(Vec<u8>, Vec<u8>)>,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    // When merging, we want to keep the most recent value for each key
-    let mut merged = vec![];
-    // Use two pointers to merge the sorted lists
-    // i points to existing, j points to new_data
-    let mut i = 0;
-    let mut j = 0;
-
-    while i < existing.len() && j < new_data.len() {
-        match existing[i].0.cmp(&new_data[j].0) {
-            std::cmp::Ordering::Less => {
-                merged.push(existing[i].clone());
-                i += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                merged.push(new_data[j].clone());
-                j += 1;
-            }
-            std::cmp::Ordering::Equal => {
-                // If keys are equal, take the value from new_data (most recent)
-                merged.push(new_data[j].clone());
-                i += 1;
-                j += 1;
-            }
-        }
-    }
-
-    // Add remaining items from existing
-    while i < existing.len() {
-        merged.push(existing[i].clone());
-        i += 1;
-    }
-
-    // Add remaining items from new_data
-    while j < new_data.len() {
-        merged.push(new_data[j].clone());
-        j += 1;
-    }
-
-    merged
+    // TODO: Implement merge_sorted
+    // Merge two sorted lists; newer data wins on duplicate keys
+    todo!("Implement merge_sorted")
 }
 
 #[derive(Debug)]
