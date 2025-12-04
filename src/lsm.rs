@@ -10,6 +10,15 @@ pub struct LsmTree {
     memtable_threshold: usize,
 }
 
+fn merge_sorted(
+    existing: Vec<(Vec<u8>, Vec<u8>)>,
+    new_data: Vec<(Vec<u8>, Vec<u8>)>,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    // TODO: Implement merge_sorted
+    // Merge two sorted lists; newer data wins on duplicate keys
+    todo!("Implement merge_sorted")
+}
+
 impl LsmTree {
     pub fn new(memtable_threshold: usize) -> Self {
         LsmTree {
@@ -26,8 +35,16 @@ impl LsmTree {
     pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
         // TODO: Implement insert
         // Insert into memtable, flush to disk if threshold reached
-        // Useful: self.memtable.insert(), self.memtable.len(), self.flush_memtable()
+        // Useful: self.memtable.insert(), self.memtable.len(), self.level_capacity(),
+        //         self.flush_memtable()
         todo!("Implement insert")
+    }
+
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        // TODO: Implement get
+        // Check memtable first, then search through levels
+        // Useful: self.memtable.get(), level.stats.{lower,upper}
+        todo!("Implement get")
     }
 
     fn flush_memtable(&mut self) {
@@ -66,13 +83,6 @@ impl LsmTree {
                 data: sst,
             });
         }
-    }
-
-    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        // TODO: Implement get
-        // Check memtable first, then search through levels
-        // Useful: self.memtable.get(), level.stats.{lower,upper}
-        todo!("Implement get")
     }
 
     /// Scans for all key-value pairs in the range [start, end].
@@ -257,15 +267,6 @@ fn compute_stats(data: &[(Vec<u8>, Vec<u8>)]) -> LevelStats {
     let lower = data.first().map(|(k, _)| k.clone()).unwrap_or_default();
     let upper = data.last().map(|(k, _)| k.clone()).unwrap_or_default();
     LevelStats { lower, upper }
-}
-
-fn merge_sorted(
-    existing: Vec<(Vec<u8>, Vec<u8>)>,
-    new_data: Vec<(Vec<u8>, Vec<u8>)>,
-) -> Vec<(Vec<u8>, Vec<u8>)> {
-    // TODO: Implement merge_sorted
-    // Merge two sorted lists; newer data wins on duplicate keys
-    todo!("Implement merge_sorted")
 }
 
 #[derive(Debug)]
