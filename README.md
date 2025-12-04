@@ -10,6 +10,15 @@ The main branch has several key functions removed and replaced with `todo!()` ma
 
 If you get stuck there is a `HINTS.md` file that has some guidance on how to implement the missing pieces, and a complete implentation is available in the `solution` branch.
 
+## Tasks:
+- Implement the `insert` method to add key-value pairs to the LSM tree.
+- Implement the `merge_sorted` function to merge two sorted lists of key-value pairs.
+- Implement the `get` method to retrieve values by key from the LSM tree.
+
+## Extra Credit
+- Implement a `delete` method to remove key-value pairs from the LSM tree.
+- Support multiple runs per level in the LSM tree for more granular compaction.
+
 ## Running Tests
 To run the tests, simply execute:
 ```bash
