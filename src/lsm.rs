@@ -592,4 +592,310 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn test_merge_sorted_basic() {
+        let existing = vec![
+            (b"a".to_vec(), b"1".to_vec()),
+            (b"c".to_vec(), b"3".to_vec()),
+        ];
+        let new_data = vec![
+            (b"b".to_vec(), b"2".to_vec()),
+            (b"d".to_vec(), b"4".to_vec()),
+        ];
+
+        let result = merge_sorted(existing, new_data);
+
+        assert_eq!(
+            result,
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+                (b"c".to_vec(), b"3".to_vec()),
+                (b"d".to_vec(), b"4".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_sorted_with_duplicates() {
+        // When keys are equal, new_data should win
+        let existing = vec![
+            (b"a".to_vec(), b"old".to_vec()),
+            (b"b".to_vec(), b"old".to_vec()),
+        ];
+        let new_data = vec![
+            (b"a".to_vec(), b"new".to_vec()),
+            (b"c".to_vec(), b"new".to_vec()),
+        ];
+
+        let result = merge_sorted(existing, new_data);
+
+        assert_eq!(
+            result,
+            vec![
+                (b"a".to_vec(), b"new".to_vec()), // new_data wins
+                (b"b".to_vec(), b"old".to_vec()),
+                (b"c".to_vec(), b"new".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_sorted_empty_inputs() {
+        let empty: Vec<(Vec<u8>, Vec<u8>)> = vec![];
+        let data = vec![(b"a".to_vec(), b"1".to_vec())];
+
+        // Empty existing
+        assert_eq!(merge_sorted(empty.clone(), data.clone()), data);
+
+        // Empty new_data
+        assert_eq!(merge_sorted(data.clone(), empty.clone()), data);
+
+        // Both empty
+        assert_eq!(merge_sorted(empty.clone(), empty), vec![]);
+    }
+
+    #[test]
+    fn test_compute_stats_basic() {
+        let data = vec![
+            (b"apple".to_vec(), b"1".to_vec()),
+            (b"banana".to_vec(), b"2".to_vec()),
+            (b"cherry".to_vec(), b"3".to_vec()),
+        ];
+
+        let stats = compute_stats(&data);
+
+        assert_eq!(stats.lower, b"apple".to_vec());
+        assert_eq!(stats.upper, b"cherry".to_vec());
+    }
+
+    #[test]
+    fn test_compute_stats_single_element() {
+        let data = vec![(b"only".to_vec(), b"1".to_vec())];
+
+        let stats = compute_stats(&data);
+
+        assert_eq!(stats.lower, b"only".to_vec());
+        assert_eq!(stats.upper, b"only".to_vec());
+    }
+
+    #[test]
+    fn test_compute_stats_empty() {
+        let data: Vec<(Vec<u8>, Vec<u8>)> = vec![];
+
+        let stats = compute_stats(&data);
+
+        assert_eq!(stats.lower, Vec::<u8>::new());
+        assert_eq!(stats.upper, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_heap_merge_item_ordering() {
+        // HeapMergeItem uses reverse ordering for min-heap behavior
+        let item_a = HeapMergeItem {
+            key: b"a",
+            value: b"1",
+            index: 0,
+        };
+        let item_b = HeapMergeItem {
+            key: b"b",
+            value: b"2",
+            index: 0,
+        };
+
+        // "a" < "b", so item_a should be "greater" in heap ordering (comes out first)
+        assert!(item_a > item_b);
+    }
+
+    #[test]
+    fn test_heap_merge_item_same_key_different_index() {
+        // When keys are equal, lower index should have higher priority
+        let item_idx0 = HeapMergeItem {
+            key: b"same",
+            value: b"1",
+            index: 0,
+        };
+        let item_idx1 = HeapMergeItem {
+            key: b"same",
+            value: b"2",
+            index: 1,
+        };
+
+        // Lower index should be "greater" (higher priority in max-heap)
+        assert!(item_idx0 > item_idx1);
+    }
+
+    #[test]
+    fn test_level_capacity() {
+        let lsm = LsmTree::new(4);
+
+        // Level 0: 4 * 2^0 = 4
+        assert_eq!(lsm.level_capacity(0), 4);
+        // Level 1: 4 * 2^1 = 8
+        assert_eq!(lsm.level_capacity(1), 8);
+        // Level 2: 4 * 2^2 = 16
+        assert_eq!(lsm.level_capacity(2), 16);
+        // Level 3: 4 * 2^3 = 32
+        assert_eq!(lsm.level_capacity(3), 32);
+    }
+
+    #[test]
+    fn test_scan_partial_range() {
+        let mut lsm = LsmTree::new(10);
+
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+        lsm.insert(b"d".to_vec(), b"4".to_vec());
+        lsm.insert(b"e".to_vec(), b"5".to_vec());
+
+        // Scan only b to d
+        let items: Vec<_> = lsm.scan(Some(b"b"), Some(b"d")).collect();
+
+        assert_eq!(
+            items,
+            vec![
+                (b"b".as_slice(), b"2".as_slice()),
+                (b"c".as_slice(), b"3".as_slice()),
+                (b"d".as_slice(), b"4".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scan_start_only() {
+        let mut lsm = LsmTree::new(10);
+
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+
+        // Scan from b to end
+        let items: Vec<_> = lsm.scan(Some(b"b"), None).collect();
+
+        assert_eq!(
+            items,
+            vec![
+                (b"b".as_slice(), b"2".as_slice()),
+                (b"c".as_slice(), b"3".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_scan_end_only() {
+        let mut lsm = LsmTree::new(10);
+
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
+        lsm.insert(b"c".to_vec(), b"3".to_vec());
+
+        // Scan from beginning to b
+        let items: Vec<_> = lsm.scan(None, Some(b"b")).collect();
+
+        assert_eq!(
+            items,
+            vec![
+                (b"a".as_slice(), b"1".as_slice()),
+                (b"b".as_slice(), b"2".as_slice()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_get_uses_stats_filtering() {
+        let mut lsm = LsmTree::new(2);
+
+        // Insert keys that will flush to L0
+        lsm.insert(b"m".to_vec(), b"1".to_vec());
+        lsm.insert(b"n".to_vec(), b"2".to_vec());
+
+        // L0 now has keys "m" to "n"
+        // Querying for "a" (below range) or "z" (above range) should skip the level
+        assert_eq!(lsm.get(b"a"), None);
+        assert_eq!(lsm.get(b"z"), None);
+
+        // Keys in range should still work
+        assert_eq!(lsm.get(b"m"), Some(b"1".to_vec()));
+        assert_eq!(lsm.get(b"n"), Some(b"2".to_vec()));
+    }
+
+    #[test]
+    fn test_memtable_len() {
+        let mut lsm = LsmTree::new(10);
+
+        assert_eq!(lsm.memtable_len(), 0);
+
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        assert_eq!(lsm.memtable_len(), 1);
+
+        lsm.insert(b"b".to_vec(), b"2".to_vec());
+        assert_eq!(lsm.memtable_len(), 2);
+
+        // Overwriting doesn't increase count
+        lsm.insert(b"a".to_vec(), b"updated".to_vec());
+        assert_eq!(lsm.memtable_len(), 2);
+    }
+
+    #[test]
+    fn test_multiple_level_compactions() {
+        // Test that data correctly cascades through multiple levels
+        let mut lsm = LsmTree::new(2);
+
+        // Insert enough data to trigger multiple level compactions
+        // With threshold 2:
+        // - L0 capacity: 2
+        // - L1 capacity: 4
+        // - L2 capacity: 8
+
+        // Insert 8 unique keys to fill up through L2
+        for i in 0..8 {
+            let key = format!("key{:02}", i).into_bytes();
+            let value = format!("val{:02}", i).into_bytes();
+            lsm.insert(key, value);
+        }
+
+        // Verify all keys are retrievable
+        for i in 0..8 {
+            let key = format!("key{:02}", i).into_bytes();
+            let expected = format!("val{:02}", i).into_bytes();
+            assert_eq!(lsm.get(&key), Some(expected), "Failed for key{:02}", i);
+        }
+    }
+
+    #[test]
+    fn test_scan_empty_tree() {
+        let lsm = LsmTree::new(10);
+
+        let items: Vec<_> = lsm.scan(None, None).collect();
+        assert!(items.is_empty());
+
+        let items: Vec<_> = lsm.scan(Some(b"a"), Some(b"z")).collect();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_scan_no_matches_in_range() {
+        let mut lsm = LsmTree::new(10);
+
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"z".to_vec(), b"2".to_vec());
+
+        // Scan for range with no keys
+        let items: Vec<_> = lsm.scan(Some(b"m"), Some(b"n")).collect();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_get_not_found_in_level() {
+        let mut lsm = LsmTree::new(2);
+
+        // Insert and flush to create a level
+        lsm.insert(b"a".to_vec(), b"1".to_vec());
+        lsm.insert(b"c".to_vec(), b"2".to_vec());
+
+        // "b" is within stats range [a, c] but doesn't exist
+        assert_eq!(lsm.get(b"b"), None);
+    }
 }
