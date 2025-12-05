@@ -14,9 +14,39 @@ fn merge_sorted(
     existing: Vec<(Vec<u8>, Vec<u8>)>,
     new_data: Vec<(Vec<u8>, Vec<u8>)>,
 ) -> Vec<(Vec<u8>, Vec<u8>)> {
-    // TODO: Implement merge_sorted
     // Merge two sorted lists; newer data wins on duplicate keys
-    todo!("Implement merge_sorted")
+    let mut result = Vec::with_capacity(existing.len() + new_data.len());
+    let mut existing_iter = existing.into_iter().peekable();
+    let mut new_iter = new_data.into_iter().peekable();
+
+    loop {
+        match (existing_iter.peek(), new_iter.peek()) {
+            (Some((existing_key, _)), Some((new_key, _))) => {
+                match existing_key.cmp(new_key) {
+                    std::cmp::Ordering::Less => {
+                        result.push(existing_iter.next().unwrap());
+                    }
+                    std::cmp::Ordering::Greater => {
+                        result.push(new_iter.next().unwrap());
+                    }
+                    std::cmp::Ordering::Equal => {
+                        // Keys are equal - new_data wins (more recent)
+                        existing_iter.next(); // discard old value
+                        result.push(new_iter.next().unwrap());
+                    }
+                }
+            }
+            (Some(_), None) => {
+                result.push(existing_iter.next().unwrap());
+            }
+            (None, Some(_)) => {
+                result.push(new_iter.next().unwrap());
+            }
+            (None, None) => break,
+        }
+    }
+
+    result
 }
 
 impl LsmTree {
@@ -33,18 +63,35 @@ impl LsmTree {
     }
 
     pub fn insert(&mut self, key: Vec<u8>, value: Vec<u8>) {
-        // TODO: Implement insert
-        // Insert into memtable, flush to disk if threshold reached
-        // Useful: self.memtable.insert(), self.memtable.len(), self.level_capacity(),
-        //         self.flush_memtable()
-        todo!("Implement insert")
+        // Insert into the memtable (in-memory sorted structure)
+        self.memtable.insert(key, value);
+
+        // If memtable has reached the threshold, flush it to disk (level 0)
+        if self.memtable.len() >= self.memtable_threshold {
+            self.flush_memtable();
+        }
     }
 
     pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        // TODO: Implement get
-        // Check memtable first, then search through levels
-        // Useful: self.memtable.get(), level.stats.{lower,upper}
-        todo!("Implement get")
+        // 1. Check memtable first (most recent writes)
+        if let Some(value) = self.memtable.get(key) {
+            return Some(value.clone());
+        }
+
+        // 2. Search through levels (L0 is most recent, then L1, L2, ...)
+        for level in self.levels.iter().filter_map(|l| l.as_ref()) {
+            // Use stats to skip levels where key can't exist (bloom filter optimization)
+            if key < level.stats.lower.as_slice() || key > level.stats.upper.as_slice() {
+                continue;
+            }
+
+            // Binary search within the level's sorted data
+            if let Ok(idx) = level.data.binary_search_by(|(k, _)| k.as_slice().cmp(key)) {
+                return Some(level.data[idx].1.clone());
+            }
+        }
+
+        None
     }
 
     fn flush_memtable(&mut self) {
